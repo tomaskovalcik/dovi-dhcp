@@ -46,7 +46,7 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
                                            dst=dst_mac, src=self.DHCP_SERVER_MAC))
         pkt.add_protocol(ipv4.ipv4(dst=dst_ip, src=self.DHCP_SERVER_IP, proto=17))
         pkt.add_protocol(udp.udp(src_port=67, dst_port=68))
-        pkt.add_protocol(dhcp.dhcp(op=1, chaddr=dst_mac))
+        pkt.add_protocol(dhcp.dhcp(op=2, chaddr=dst_mac))
         pkt.serialize()
         self.inject_packet(pkt, dp, port)
 
