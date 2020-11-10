@@ -45,7 +45,7 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
         # TODO: premysliet databazu, neviem ci jednoduchy dict bude stacit..
         self.database = {}
-        self.dp={}
+        self.dp = {}
         # toto predstavuje temp databazu - teda zatial tam ukladam IP adresy ktore su v procese pridelovania
         # neviem aky to ma zmysel zatial to necham tak
         self.temp_offered = {}
@@ -57,17 +57,31 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         self.pools = {1: self.s1_pool, 2: self.s2_pool, 3: self.s3_pool}
         self.space = {1: self.s1, 2: self.s2, 3: self.s3}
 
+    # @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
+    # def _packet_in(self, ev):
+    #     msg = ev.msg
+    #     datapath = msg.datapath
+    #     in_port = msg.match["in_port"]
+    #     # self.dp[str(datapath.id)]=datapath
+    #     pkt = packet.Packet(msg.data)
+    #     eth = pkt.get_protocols(ethernet.ethernet)[0]
+    #     dhcp_packet = pkt.get_protocol(dhcp.dhcp)
+    #
+    #     if dhcp_packet:
+
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def _packet_in(self, ev):
+    def _packet_in_handler(self, ev):
         msg = ev.msg
         datapath = msg.datapath
         in_port = msg.match["in_port"]
-        #self.dp[str(datapath.id)]=datapath
         pkt = packet.Packet(msg.data)
-        eth = pkt.get_protocols(ethernet.ethernet)[0]
         dhcp_packet = pkt.get_protocol(dhcp.dhcp)
-        self.add_flow_erase_dup(datapath,in_port, dhcp_packet)
-        if dhcp_packet:
+
+        self.add_flow_erase_dup(datapath, in_port, dhcp_packet)
+
+        if not dhcp_packet:
+            super(DhcpServer, self)._packet_in_handler(ev)
+        else:
             msg_type = ord(dhcp_packet.options.option_list[0].value)
             if self.messages.get(msg_type) == "DHCP DISCOVER":
                 self.create_dhcp_offer(dhcp_packet, datapath, in_port)
@@ -78,39 +92,45 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
-                                             actions)]
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
         if buffer_id:
-            mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
-                                    priority=priority, match=match,
-                                    instructions=inst)
+            mod = parser.OFPFlowMod(
+                datapath=datapath,
+                buffer_id=buffer_id,
+                priority=priority,
+                match=match,
+                instructions=inst,
+            )
         else:
-            mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    match=match, instructions=inst)
+            mod = parser.OFPFlowMod(
+                datapath=datapath, priority=priority, match=match, instructions=inst
+            )
         datapath.send_msg(mod)
-    def add_flow_erase_dup(self, dp,in_port,dhcppkt):
+
+    def add_flow_erase_dup(self, dp, in_port, dhcppkt):
         ofproto = dp.ofproto
         parser = dp.ofproto_parser
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
+        actions = [
+            parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)
+        ]
 
+        match = parser.OFPMatch(
+            # in_port=in_port,
+            eth_type=ether.ETH_TYPE_IP,
+            eth_dst="ff:ff:ff:ff:ff:ff",
+            ip_proto=inet.IPPROTO_UDP,
+            ipv4_src="0.0.0.0",
+            ipv4_dst="255.255.255.255",
+            udp_src=68,
+            udp_dst=67,
+        )
 
-        match = parser.OFPMatch(in_port=in_port,
-                                eth_type=ether.ETH_TYPE_IP,
-                                eth_dst='ff:ff:ff:ff:ff:ff',
-                                ip_proto=inet.IPPROTO_UDP,
-                                ipv4_src='0.0.0.0',
-                                ipv4_dst='255.255.255.255',
-                                udp_src=68,
-                                udp_dst=67)
-
-        self.add_flow( dp, 10, match, actions)
+        self.add_flow(dp, 10, match, actions)
 
     def create_dhcp_ack(self, dhcp_packet, dp, port, dst_ip="255.255.255.255"):
 
         if self.temp_offered.get(dhcp_packet.xid) is None:
             return
-
 
         subnet_mask = self.space[dp.id].netmask
         yiaddr = self.temp_offered[dhcp_packet.xid]["yiaddr"]
@@ -147,7 +167,6 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
             options=options,
         )
 
-
         pkt.add_protocol(
             ethernet.ethernet(
                 ethertype=ether.ETH_TYPE_IP, dst=chaddr, src=self.DHCP_SERVER_MAC
@@ -157,7 +176,6 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         pkt.add_protocol(udp.udp(src_port=67, dst_port=68))
         pkt.add_protocol(dhcp_pkt)
         pkt.serialize()
-
 
         self.inject_packet(pkt, dp, port)
 
