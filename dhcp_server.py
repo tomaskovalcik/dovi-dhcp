@@ -25,9 +25,9 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
     # TODO: najst lepsi sposob ako toto robit, nepaci sa mi to velmi
     DHCP_SERVER_MAC = "aa:bb:cc:dd:ee:ff"
-    DHCP_SERVER_IP = "10.0.0.254"
-
-    s1 = ipaddress.ip_network("192.168.1.0/29")
+    DHCP_SERVER_IP=None
+    scope1="192.168.1.0/29"
+    s1 = ipaddress.ip_network(scope1)
     s2 = ipaddress.ip_network("192.168.1.8/29")
     s3 = ipaddress.ip_network("192.168.1.16/29")
 

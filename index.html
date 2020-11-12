@@ -6,10 +6,17 @@
 <p>This dashboard is used to set up DHCP Server on Ryu controller. </p>
 
 <form id="myForm">
-  <label for="fname">Enter DHCP Scope:</label><br>
-  <input type="text" id="network" name="network" value="10.0.0.0/24"><br>
-  <label for="lname">Ented default GW:</label><br>
-  <input type="text" id="gw" name="gw" value="10.0.0.1"><br><br>
+  <label for="fname">Enter DHCP ScopeA:</label><br>
+  <input type="text" id="networkA" name="networkA" value="10.1.1.0/24"><br>
+
+  <label for="fname">Enter DHCP ScopeB:</label><br>
+  <input type="text" id="networkB" name="networkB" value="10.2.2.0/24"><br>
+
+ <label for="fname">Enter DHCP ScopeC:</label><br>
+  <input type="text" id="networkC" name="networkC" value="10.3.3.0/24"><br>
+
+  <label for="lname">Ented IP of DHCP SERVER:</label><br>
+  <input type="text" id="gw" name="gw" value="10.1.1.254"><br><br>
   <input type="submit" value="Submit">
 </form> 
 
