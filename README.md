@@ -23,3 +23,8 @@ mininet> h1 dhclient h1-eth0 -v
 ```console
 mininet> h1 dhclient h1-eth0 -r
 ```
+
+**To access webpage**: 
+```console
+http://0.0.0.0:8080/dashboard
+```
