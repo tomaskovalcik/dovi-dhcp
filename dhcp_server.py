@@ -30,6 +30,7 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
     s1 = ipaddress.ip_network(scope1)
     s2 = ipaddress.ip_network("192.168.1.8/29")
     s3 = ipaddress.ip_network("192.168.1.16/29")
+    LEASE_TIME_ACK = b"\xFF\xFF\xFF\xFF"
 
     def __init__(self, *args, **kwargs):
         super(DhcpServer, self).__init__(*args, **kwargs)
@@ -138,12 +139,15 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
         pkt = packet.Packet()
         dhcp_ack_msg_type = b"\x05"
+        print(type(dhcp_ack_msg_type))
         subnet_option = dhcp.option(
             tag=dhcp.DHCP_SUBNET_MASK_OPT,
             value=addrconv.ipv4.text_to_bin(subnet_mask),
         )
+
+
         time_option = dhcp.option(
-            tag=dhcp.DHCP_IP_ADDR_LEASE_TIME_OPT, value=b"\xFF\xFF\xFF\xFF"
+            tag=dhcp.DHCP_IP_ADDR_LEASE_TIME_OPT, value=self.LEASE_TIME_ACK
         )
         msg_option = dhcp.option(
             tag=dhcp.DHCP_MESSAGE_TYPE_OPT, value=dhcp_ack_msg_type

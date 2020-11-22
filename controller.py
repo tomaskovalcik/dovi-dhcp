@@ -45,5 +45,11 @@ class Controller(ControllerBase):
         dhcp_server.pools = poolstmp
         spacetmp = {1: s1, 2: s2, 3: s3}
         dhcp_server.space=spacetmp
+
+        lease_time = req.POST['time']
+
+        dhcp_server.LEASE_TIME_ACK=str(hex(int(lease_time)))
+
+
         return msg
 
