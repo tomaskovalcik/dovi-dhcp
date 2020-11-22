@@ -25,11 +25,12 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
     # TODO: najst lepsi sposob ako toto robit, nepaci sa mi to velmi
     DHCP_SERVER_MAC = "aa:bb:cc:dd:ee:ff"
-    DHCP_SERVER_IP=None
-    scope1="192.168.1.0/29"
+    DHCP_SERVER_IP = None
+    scope1 = "192.168.1.0/29"
     s1 = ipaddress.ip_network(scope1)
     s2 = ipaddress.ip_network("192.168.1.8/29")
     s3 = ipaddress.ip_network("192.168.1.16/29")
+    LEASE_TIME_ACK = b"\xFF\xFF\xFF\xFF"
 
     def __init__(self, *args, **kwargs):
         super(DhcpServer, self).__init__(*args, **kwargs)
@@ -57,18 +58,6 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         self.pools = {1: self.s1_pool, 2: self.s2_pool, 3: self.s3_pool}
         self.space = {1: self.s1, 2: self.s2, 3: self.s3}
 
-    # @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    # def _packet_in(self, ev):
-    #     msg = ev.msg
-    #     datapath = msg.datapath
-    #     in_port = msg.match["in_port"]
-    #     # self.dp[str(datapath.id)]=datapath
-    #     pkt = packet.Packet(msg.data)
-    #     eth = pkt.get_protocols(ethernet.ethernet)[0]
-    #     dhcp_packet = pkt.get_protocol(dhcp.dhcp)
-    #
-    #     if dhcp_packet:
-
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg
@@ -77,7 +66,7 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         pkt = packet.Packet(msg.data)
         dhcp_packet = pkt.get_protocol(dhcp.dhcp)
 
-        self.add_flow_erase_dup(datapath, in_port, dhcp_packet)
+        self.add_flow_erase_dup(datapath)
 
         if not dhcp_packet:
             super(DhcpServer, self)._packet_in_handler(ev)
@@ -88,26 +77,7 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
             elif self.messages.get(msg_type) == "DHCP REQUEST":
                 self.create_dhcp_ack(dhcp_packet, datapath, in_port)
 
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        if buffer_id:
-            mod = parser.OFPFlowMod(
-                datapath=datapath,
-                buffer_id=buffer_id,
-                priority=priority,
-                match=match,
-                instructions=inst,
-            )
-        else:
-            mod = parser.OFPFlowMod(
-                datapath=datapath, priority=priority, match=match, instructions=inst
-            )
-        datapath.send_msg(mod)
-
-    def add_flow_erase_dup(self, dp, in_port, dhcppkt):
+    def add_flow_erase_dup(self, dp):
         ofproto = dp.ofproto
         parser = dp.ofproto_parser
         actions = [
@@ -138,12 +108,14 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
         pkt = packet.Packet()
         dhcp_ack_msg_type = b"\x05"
+        print(type(dhcp_ack_msg_type))
         subnet_option = dhcp.option(
             tag=dhcp.DHCP_SUBNET_MASK_OPT,
             value=addrconv.ipv4.text_to_bin(subnet_mask),
         )
+
         time_option = dhcp.option(
-            tag=dhcp.DHCP_IP_ADDR_LEASE_TIME_OPT, value=b"\xFF\xFF\xFF\xFF"
+            tag=dhcp.DHCP_IP_ADDR_LEASE_TIME_OPT, value=bytearray(self.LEASE_TIME_ACK)
         )
         msg_option = dhcp.option(
             tag=dhcp.DHCP_MESSAGE_TYPE_OPT, value=dhcp_ack_msg_type
@@ -185,10 +157,6 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         yiaddr = self.pools[dp.id].pop(-1)
         self.temp_offered[xid] = {"chaddr": chaddr, "yiaddr": yiaddr}
 
-        # for i in self.dup:
-        #     if i == xid:
-        #         return
-
         pkt = packet.Packet()
         dhcp_offer_msg_type = b"\x02"
         hlen = dhcp_packet.hlen
@@ -218,7 +186,6 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
             )
         )
         pkt.serialize()
-        # self.dup.append(xid)
         self.inject_packet(pkt, dp, port)
 
     def inject_packet(self, pkt, dp, port):
