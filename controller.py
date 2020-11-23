@@ -25,7 +25,18 @@ class Controller(ControllerBase):
     @staticmethod
     def _split(hex_num):
         n = hex_num[2:]
-        return [n[i : i + 2] for i in range(0, len(n), 2)]
+        hex_array = []
+        for i in range(len(n), 0, -2):
+            if n[i:i + 2] == "":
+                continue
+            hex_array.append(n[i:i + 2])
+
+        if len(n) % 2 != 0:
+            hex_array.insert(0, n[0])
+        else:
+            hex_array.insert(0, n[:2])
+
+        return hex_array
 
     def _build(self, hex_num):
         default = ["00", "00", "00", "00"]
@@ -40,7 +51,6 @@ class Controller(ControllerBase):
 
     @route("dhcp_server", "/data", methods=["POST"])
     def evaluate_dashboard(self, req, **kwargs):
-        # this is called at the end of the test
         msg = "Done!"
         scope_netA = req.POST["networkA"]
         scope_netB = req.POST["networkB"]

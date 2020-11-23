@@ -6,16 +6,10 @@ from ryu.controller.handler import MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from controller import Controller
 from ryu.ofproto import ofproto_v1_3, ether
-from ryu.lib.packet import packet, ethernet, dhcp, ipv4, udp
+from ryu.lib.packet import packet, ethernet, dhcp, ipv4, udp, arp, ether_types
 from ryu.lib import addrconv
 import ipaddress
 from ryu.ofproto import inet
-
-# TODO: databaza pre alokovane IP
-# TODO: pridat pravidla pre switche - aby nechodili duplikaty
-# TODO: ak client uvolni IP adresu, naspat ju pridat do poolu
-# TODO: ak client uz raz dostal IP adresu, tak snazit sa pridat tu istu adresu zase
-# TODO: riadit sa https://tools.ietf.org/html/rfc2131#section-4.1 a minimalne spravit veci co su opisane v sekcii 3.1 a 3.2
 
 
 class DhcpServer(simple_switch_13.SimpleSwitch13):
@@ -23,7 +17,6 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
     _CONTEXTS = {"wsgi": WSGIApplication}
 
-    # TODO: najst lepsi sposob ako toto robit, nepaci sa mi to velmi
     DHCP_SERVER_MAC = "aa:bb:cc:dd:ee:ff"
     DHCP_SERVER_IP = None
     scope1 = "192.168.1.0/29"
@@ -42,13 +35,9 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
             2: "DHCP OFFER",
             3: "DHCP REQUEST",
             4: "DHCP ACK",
+            7: "DHCP RELEASE",
         }
-
-        # TODO: premysliet databazu, neviem ci jednoduchy dict bude stacit..
         self.database = {}
-        self.dp = {}
-        # toto predstavuje temp databazu - teda zatial tam ukladam IP adresy ktore su v procese pridelovania
-        # neviem aky to ma zmysel zatial to necham tak
         self.temp_offered = {}
 
         self.s1_pool = [ip for ip in self.s1.hosts()]
@@ -60,11 +49,26 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
+
+        if self.DHCP_SERVER_IP is None:
+            return
+
         msg = ev.msg
         datapath = msg.datapath
         in_port = msg.match["in_port"]
         pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocols(ethernet.ethernet)[0]
+
         dhcp_packet = pkt.get_protocol(dhcp.dhcp)
+
+        if (
+            eth.ethertype == ether_types.ETH_TYPE_ARP
+            and pkt.get_protocol(arp.arp).dst_ip == self.DHCP_SERVER_IP
+        ):
+            self.create_arp_packet(
+                pkt.get_protocol(arp.arp).src_ip, eth.src, in_port, datapath
+            )
+            return
 
         self.add_flow_erase_dup(datapath)
 
@@ -76,6 +80,17 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
                 self.create_dhcp_offer(dhcp_packet, datapath, in_port)
             elif self.messages.get(msg_type) == "DHCP REQUEST":
                 self.create_dhcp_ack(dhcp_packet, datapath, in_port)
+            elif self.messages.get(msg_type) == "DHCP RELEASE":
+                self.handle_dhcp_release(dhcp_packet, datapath)
+
+    def handle_dhcp_release(self, dhcp_packet, dp):
+        client_id = dhcp_packet.chaddr
+        released_ip = self.database.get(client_id)
+
+        # released ip address is inserted at the beginning
+        # of the pool, so the next lookup is little bit faster
+        if released_ip:
+            self.pools[dp.id].insert(0, released_ip)
 
     def add_flow_erase_dup(self, dp):
         ofproto = dp.ofproto
@@ -97,6 +112,10 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
         self.add_flow(dp, 10, match, actions)
 
+    def _ip_to_int(self):
+        dhcp_server_ip = self.DHCP_SERVER_IP.split(".")
+        return [int(x) for x in dhcp_server_ip]
+
     def create_dhcp_ack(self, dhcp_packet, dp, port, dst_ip="255.255.255.255"):
 
         if self.temp_offered.get(dhcp_packet.xid) is None:
@@ -106,9 +125,12 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         yiaddr = self.temp_offered[dhcp_packet.xid]["yiaddr"]
         chaddr = self.temp_offered[dhcp_packet.xid]["chaddr"]
 
+        # add new or update existing dhcp bindings
+        # we remember only last used ip address
+        self.database[chaddr] = yiaddr
+
         pkt = packet.Packet()
         dhcp_ack_msg_type = b"\x05"
-        print(type(dhcp_ack_msg_type))
         subnet_option = dhcp.option(
             tag=dhcp.DHCP_SUBNET_MASK_OPT,
             value=addrconv.ipv4.text_to_bin(subnet_mask),
@@ -120,11 +142,17 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         msg_option = dhcp.option(
             tag=dhcp.DHCP_MESSAGE_TYPE_OPT, value=dhcp_ack_msg_type
         )
+
+        dhcp_server_option = dhcp.option(
+            tag=dhcp.DHCP_SERVER_IDENTIFIER_OPT, value=bytearray(self._ip_to_int())
+        )
+
         options = dhcp.options(
             option_list=[
                 msg_option,
                 time_option,
                 subnet_option,
+                dhcp_server_option,
             ]
         )
 
@@ -134,6 +162,7 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
             hlen=hlen,
             chaddr=dhcp_packet.chaddr,
             yiaddr=yiaddr,
+            siaddr=self.DHCP_SERVER_IP,
             giaddr=dhcp_packet.giaddr,
             xid=dhcp_packet.xid,
             options=options,
@@ -153,8 +182,21 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
 
     def create_dhcp_offer(self, dhcp_packet, dp, port, dst_ip="255.255.255.255"):
         xid = dhcp_packet.xid  # transaction id
+
         chaddr = dhcp_packet.chaddr
-        yiaddr = self.pools[dp.id].pop(-1)
+        yiaddr = None
+
+        previous_ip = self.database.get(chaddr)
+
+        if previous_ip:
+            if previous_ip in self.pools[dp.id]:
+                self.pools[dp.id].remove(previous_ip)
+                yiaddr = previous_ip
+            else:
+                yiaddr = self.pools[dp.id].pop(-1)
+        else:
+            yiaddr = self.pools[dp.id].pop(-1)
+
         self.temp_offered[xid] = {"chaddr": chaddr, "yiaddr": yiaddr}
 
         pkt = packet.Packet()
@@ -164,7 +206,11 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         msg_option = dhcp.option(
             tag=dhcp.DHCP_MESSAGE_TYPE_OPT, value=dhcp_offer_msg_type
         )
-        options = dhcp.options(option_list=[msg_option])
+
+        dhcp_server_option = dhcp.option(
+            tag=dhcp.DHCP_SERVER_IDENTIFIER_OPT, value=bytearray(self._ip_to_int())
+        )
+        options = dhcp.options(option_list=[msg_option, dhcp_server_option])
 
         pkt.add_protocol(
             ethernet.ethernet(
@@ -179,6 +225,7 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
                 hlen=hlen,
                 op=dhcp.DHCP_BOOT_REPLY,
                 yiaddr=yiaddr,
+                siaddr=self.DHCP_SERVER_IP,
                 xid=dhcp_packet.xid,
                 giaddr=dhcp_packet.giaddr,
                 chaddr=chaddr,
@@ -188,7 +235,33 @@ class DhcpServer(simple_switch_13.SimpleSwitch13):
         pkt.serialize()
         self.inject_packet(pkt, dp, port)
 
-    def inject_packet(self, pkt, dp, port):
+    def create_arp_packet(self, dst_ip, dst_mac, src_port=None, datapath=None):
+        pkt = packet.Packet()
+        pkt.add_protocol(
+            ethernet.ethernet(
+                dst=dst_mac,
+                src=self.DHCP_SERVER_MAC,
+                ethertype=ether.ETH_TYPE_ARP,
+            )
+        )
+        pkt.add_protocol(
+            arp.arp(
+                hwtype=1,
+                proto=0x0800,
+                hlen=6,
+                plen=4,
+                opcode=2,
+                src_mac=self.DHCP_SERVER_MAC,
+                src_ip=self.DHCP_SERVER_IP,
+                dst_mac=dst_mac,
+                dst_ip=dst_ip,
+            )
+        )
+        pkt.serialize()
+        self.inject_packet(pkt, datapath, src_port)
+
+    @staticmethod
+    def inject_packet(pkt, dp, port):
         ofproto = dp.ofproto
         parser = dp.ofproto_parser
         data = pkt.data
